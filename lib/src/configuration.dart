@@ -41,26 +41,37 @@ abstract class Configuration {
   /// If it returns a nonempty list, the parser will thrown a ConfigurationException.
   List<String> validate() => [];
 
-  static bool _isVariableRequired(VariableMirror m) {
+  static bool _isVariableRequired(DeclarationMirror m) {
     ConfigurationItemAttribute attribute = m.metadata
         .firstWhere((im) => im.type.isSubtypeOf(reflectType(ConfigurationItemAttribute)), orElse: () => null)
-        ?.reflectee;
+        ?.reflectee as ConfigurationItemAttribute;
 
     return attribute == null || attribute.type == ConfigurationItemAttributeType.required;
   }
 
-  static Map<String, VariableMirror> _getProperties(ClassMirror type) {
-    var declarations = <VariableMirror>[];
+  static Map<String, DeclarationMirror> _getProperties(ClassMirror type) {
+    var declarations = <DeclarationMirror>[];
 
     var ptr = type;
     while (ptr != null) {
-      declarations.addAll(ptr.declarations.values
-          .whereType<VariableMirror>()
-          .where((vm) => !vm.isStatic && !vm.isPrivate));
+      var properties = ptr.declarations.values.whereType<VariableMirror>();
+      var computed   = ptr.declarations.values.whereType<MethodMirror>().where((vm) {
+        if (vm.isGetter) {
+          return getSetterForGetter(vm) != null;
+        } else if (vm.isSetter) {
+          return getGetterForSetter(vm) != null;
+        } else {
+          return false;
+        }
+      }).toList()..removeWhere((MethodMirror vm) => vm.isSetter);
+
+      declarations.addAll(properties.where((vm) => !vm.isPrivate && !vm.isStatic));
+      declarations.addAll(computed  .where((vm) => !vm.isPrivate && !vm.isStatic));
+
       ptr = ptr.superclass;
     }
 
-    final output = <String, VariableMirror>{};
+    final output = <String, DeclarationMirror>{};
     declarations.forEach((vm) {
       output[MirrorSystem.getName(vm.simpleName)] = vm;
     });
@@ -81,8 +92,10 @@ abstract class Configuration {
             return;
           }
 
-          final value = _decode(property.type, name, actualValue);
-          if (!property.type.isAssignableTo(reflect(value).type)) {
+          TypeMirror type = property is VariableMirror ? property.type : getSetterForGetter(property as MethodMirror).parameters.first.type;
+
+          final value = _decode(type, name, actualValue);
+          if (!type.isAssignableTo(reflect(value).type)) {
             throw ConfigurationException(runtimeType, "The value '${actualValue}' is not assignable to the field '$name'.");
           }
 
@@ -97,8 +110,8 @@ abstract class Configuration {
     }
 
     final requiredValuesThatAreMissing = properties.values.where(_isVariableRequired)
-      .where((VariableMirror vm) => reflectedThis.getField(vm.simpleName).reflectee == null)
-      .map((VariableMirror vm) => MirrorSystem.getName(vm.simpleName))
+      .where((DeclarationMirror vm) => reflectedThis.getField(vm.simpleName).reflectee == null)
+      .map((DeclarationMirror vm) => MirrorSystem.getName(vm.simpleName))
       .toList();
 
     if (requiredValuesThatAreMissing.isNotEmpty) {
@@ -141,29 +154,31 @@ abstract class Configuration {
       value = Platform.environment[envKey];
     }
 
-    if (type.isSubtypeOf(reflectType(int))) {
-      if (value is String) {
-        final out = int.tryParse(value);
-        if (out == null) {
-          throw ConfigurationException(runtimeType, "The value '${value}' could not be parsed as an integer, and therefore cannot be assigned to the field '$name'.");
+    if (type != reflectType(dynamic)) {
+      if (type.isSubtypeOf(reflectType(int))) {
+        if (value is String) {
+          final out = int.tryParse(value);
+          if (out == null) {
+            throw ConfigurationException(runtimeType, "The value '${value}' could not be parsed as an integer, and therefore cannot be assigned to the field '$name'.");
+          }
+          return out;
         }
-        return out;
-      }
-      return value;
-    } else if (type.isSubtypeOf(reflectType(bool))) {
-      if (value is String) {
-        return value == "true";
-      }
+        return value;
+      } else if (type.isSubtypeOf(reflectType(bool))) {
+        if (value is String) {
+          return value == "true";
+        }
 
-      return value;
-    } else if (type.isSubtypeOf(reflectType(Configuration))) {
-      return _decodeConfig(type, value);
-    } else if (type.isSubtypeOf(reflectType(List))) {
-      return _decodeList(type, name, value as List);
-    } else if (type.isSubtypeOf(reflectType(Map))) {
-      return _decodeMap(type, name, value as Map);
-    } else if (type.isSubtypeOf(reflectType(String))) {
-      return value;
+        return value;
+      } else if (type.isSubtypeOf(reflectType(Configuration))) {
+        return _decodeConfig(type, value);
+      } else if (type.isSubtypeOf(reflectType(List))) {
+        return _decodeList(type, name, value as List);
+      } else if (type.isSubtypeOf(reflectType(Map))) {
+        return _decodeMap(type, name, value as Map);
+      } else if (type.isSubtypeOf(reflectType(String))) {
+        return value;
+      }
     }
 
     return value;
@@ -173,7 +188,7 @@ abstract class Configuration {
     try {
       Configuration item = (type as ClassMirror)
         .newInstance(const Symbol(""), [])
-        .reflectee;
+        .reflectee as Configuration;
       item._read(type, object);
       return item;
     } on NoSuchMethodError {
@@ -193,7 +208,7 @@ abstract class Configuration {
       return MapEntry(key, _decode(typeMirror.typeArguments.last, name, val));
     });
 
-    Map map = (typeMirror as ClassMirror).newInstance(const Symbol(""), []).reflectee;
+    Map map = (typeMirror as ClassMirror).newInstance(const Symbol(""), []).reflectee as Map;
     decoded.forEach((k, v) {
       map[k] = v;
     });
@@ -255,4 +270,23 @@ class ConfigurationError {
   String toString() {
     return "Invalid configuration type 'type'. $message";
   }
+}
+
+MethodMirror getSetterForGetter(MethodMirror getter) {
+  var targetName = '${MirrorSystem.getName(getter.simpleName)}=';
+
+  return (getter.owner as ClassMirror).declarations.values
+    .whereType<MethodMirror>()
+    .firstWhere((maybe) => maybe.isSetter && MirrorSystem.getName(maybe.simpleName) == targetName, orElse: () => null);
+}
+
+MethodMirror getGetterForSetter(MethodMirror setter) {
+  return (setter.owner as ClassMirror).declarations.values
+    .whereType<MethodMirror>()
+    .firstWhere((maybe) {
+      var targetName = '${MirrorSystem.getName(maybe.simpleName)}=';
+
+      return maybe.isGetter && MirrorSystem.getName(setter.simpleName) == targetName;
+    }
+    , orElse: () => null);
 }

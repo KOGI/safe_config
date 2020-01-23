@@ -7,6 +7,7 @@ void main() {
   test("Success case", () {
     var yamlString = "port: 80\n"
         "name: foobar\n"
+        "flags: a, b, c\n"
         "database:\n"
         "  host: stablekernel.com\n"
         "  username: bob\n"
@@ -22,10 +23,13 @@ void main() {
     expect(t.database.password, "fred");
     expect(t.database.databaseName, "dbname");
     expect(t.database.port, 5000);
+    expect(t.flags, hasLength(3));
+    expect(t.flags, containsAll(["a", "b", "c"]));
 
     var asMap = {
       "port": 80,
       "name": "foobar",
+      "flags": "a, b, c",
       "database": {
         "host": "stablekernel.com",
         "username": "bob",
@@ -42,6 +46,8 @@ void main() {
     expect(t.database.password, "fred");
     expect(t.database.databaseName, "dbname");
     expect(t.database.port, 5000);
+    expect(t.flags, hasLength(3));
+    expect(t.flags, containsAll(["a", "b", "c"]));
   });
 
   test("Configuration subclasses success case", () {
@@ -390,7 +396,9 @@ void main() {
   });
 
   test("Optional can be missing", () {
-    var yamlString = "port: 80\n"
+    var yamlString =
+        "flags: a, b, c\n"
+        "port: 80\n"
         "database:\n"
         "  host: stablekernel.com\n"
         "  username: bob\n"
@@ -409,6 +417,7 @@ void main() {
 
     var asMap = {
       "port": 80,
+      "flags": "a, b, c",
       "database": {
         "host": "stablekernel.com",
         "username": "bob",
@@ -428,8 +437,10 @@ void main() {
   });
 
   test("Nested optional can be missing", () {
-    var yamlString = "port: 80\n"
+    var yamlString =
+        "port: 80\n"
         "name: foobar\n"
+        "flags: a, b, c\n"
         "database:\n"
         "  host: stablekernel.com\n"
         "  password: fred\n"
@@ -448,6 +459,7 @@ void main() {
     var asMap = {
       "port": 80,
       "name": "foobar",
+      "flags": "a, b, c",
       "database": {"host": "stablekernel.com", "password": "fred", "databaseName": "dbname", "port": 5000}
     };
     t = TopLevelConfiguration.fromMap(asMap);
@@ -537,8 +549,10 @@ void main() {
   });
 
   test("From file works the same", () {
-    var yamlString = "port: 80\n"
+    var yamlString =
+        "port: 80\n"
         "name: foobar\n"
+        "flags: a, b, c\n"
         "database:\n"
         "  host: stablekernel.com\n"
         "  username: bob\n"
@@ -677,7 +691,7 @@ void main() {
   test("DatabaseConfiguration can be read from connection string", () {
     print(
         "This test must be run with environment variables of TEST_DB_ENV_VAR=postgres://user:password@host:5432/dbname");
-    const yamlString = "port: 80\ndatabase: \$TEST_DB_ENV_VAR";
+    const yamlString = "port: 80\nflags: a, b, c\ndatabase: \$TEST_DB_ENV_VAR";
     final config = TopLevelConfiguration.fromString(yamlString);
     expect(config.database.username, "user");
     expect(config.database.password, "password");
@@ -685,7 +699,7 @@ void main() {
     expect(config.database.port, 5432);
     expect(config.database.databaseName, "dbname");
   });
-  
+
   test("Assigning value of incorrect type to parsed integer emits error and field name", () {
     var yamlString = "port: foobar\n"
       "name: foobar\n"
@@ -767,6 +781,19 @@ class TopLevelConfiguration extends Configuration {
   String name;
 
   DatabaseConfiguration database;
+
+  List<String> _flags;
+  List<String> get flags => _flags;
+  set flags(dynamic incoming) {
+    _flags ??= [];
+    if (incoming is List) {
+      _flags.addAll(incoming.map((x) => x.toString()));
+    } else if (incoming is String) {
+      _flags.addAll(incoming.split(',').map((x) => x.trim()));
+    } else {
+      _flags.add(incoming.toString());
+    }
+  }
 }
 
 class TopLevelConfigurationWithValidation extends Configuration {
